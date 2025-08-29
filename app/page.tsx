@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { RMAForm } from '@/components/rma-form'
 import { RMATicketDisplay } from '@/components/rma-ticket-display'
-import { TeamsSignIn } from '@/components/teams-signin'
+import { TeamsSignInSafe } from '@/components/teams-signin-safe'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -64,10 +64,11 @@ export default function HomePage() {
     setSelectedTicket(ticket)
   }
 
-  const handleTeamsAuthChange = (isAuthenticated: boolean, user: any) => {
+  const handleTeamsAuthChange = (isAuthenticated: boolean, user: any, accessToken?: string) => {
     setIsTeamsAuthenticated(isAuthenticated)
     setTeamsUser(user)
-    setTeamsAccessToken(null) // Simplify for now - will get token when needed
+    setTeamsAccessToken(accessToken || null)
+    console.log('Teams auth changed:', { isAuthenticated, user: user?.displayName, hasToken: !!accessToken })
   }
 
   const getStatusIcon = (status: string) => {
@@ -113,8 +114,8 @@ export default function HomePage() {
             teamsAccessToken={teamsAccessToken}
           />
 
-          {/* Teams Sign In - Temporarily disabled */}
-          {/* <TeamsSignIn onAuthChange={handleTeamsAuthChange} /> */}
+          {/* Teams Sign In - Safe version */}
+          <TeamsSignInSafe onAuthChange={handleTeamsAuthChange} />
 
           {/* Recent Tickets */}
           <Card>

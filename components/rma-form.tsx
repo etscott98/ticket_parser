@@ -33,10 +33,11 @@ export function RMAForm({ onTicketProcessed, teamsAccessToken }: RMAFormProps) {
     try {
       const requestBody: any = { rmaNumber: rmaNumber.trim() }
       
-      // Skip Teams integration for now to prevent hangs
-      // if (teamsAccessToken) {
-      //   requestBody.teamsAccessToken = teamsAccessToken
-      // }
+      // Include Teams access token if available
+      if (teamsAccessToken) {
+        requestBody.teamsAccessToken = teamsAccessToken
+        console.log('Including Teams access token in request')
+      }
       
       console.log('Processing RMA:', requestBody)
       console.log('About to make fetch request...')

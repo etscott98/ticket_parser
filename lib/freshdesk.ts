@@ -76,8 +76,8 @@ export class FreshdeskService {
       ...ticket.conversations.map(conv => conv.body_text || conv.body)
     ]
 
-    // Pattern to match 10-digit device IDs
-    const patterns = [
+    // Pattern to match any device IDs (10-digit numbers)
+    const deviceIdPatterns = [
       /\b\d{10}\b/g,  // Exactly 10 digits with word boundaries
       /VID\s*(\d{10})/gi,  // VID prefix with 10 digits
       /ID\s*(\d{10})/gi,   // ID prefix with 10 digits
@@ -87,10 +87,18 @@ export class FreshdeskService {
       /(\d{3})[- ]?(\d{3})[- ]?(\d{4})/g,     // 10 digits with separators (3-3-4 format)
     ]
 
+    // Patterns for 5A device IDs (10 characters total: 5A + 8 more characters)
+    const fiveAPatterns = [
+      /\b5A[A-Z0-9]{8}\b/gi,     // 5A followed by exactly 8 alphanumeric characters
+      /5A[A-Z0-9\-\.\s]{8,}/gi,  // 5A + 8+ chars with separators (will clean up)
+      /5A[A-Z0-9]{8}/gi,         // 5A + exactly 8 alphanumeric (no word boundary)
+    ]
+
     for (const text of textSources) {
       if (!text) continue
       
-      for (const pattern of patterns) {
+      // First, extract regular 10-digit device IDs
+      for (const pattern of deviceIdPatterns) {
         const matches = text.matchAll(pattern)
         for (const match of matches) {
           let deviceId: string
@@ -112,6 +120,28 @@ export class FreshdeskService {
           }
         }
       }
+
+      // Now extract 5A numbers (for Teams search - store full number but will use last 6 digits)
+      for (const pattern of fiveAPatterns) {
+        const matches = text.matchAll(pattern)
+        for (const match of matches) {
+          let fiveANumber = match[0].trim()
+          // Clean up - remove spaces, dashes, and dots but keep letters and digits
+          fiveANumber = fiveANumber.replace(/[\s\-\.]/g, '').toUpperCase()
+          
+          // Validate it starts with 5A and is exactly 10 characters total
+          if (fiveANumber.startsWith('5A') && fiveANumber.length === 10) {
+            // Store the full 10-character 5A device ID
+            deviceIds.add(fiveANumber)
+            console.log(`🔍 Found 5A device ID: ${match[0]} → Cleaned: ${fiveANumber}`)
+          } else if (fiveANumber.startsWith('5A') && fiveANumber.length > 10) {
+            // If longer than 10, try to extract a 10-character portion
+            const tenCharVersion = fiveANumber.substring(0, 10)
+            deviceIds.add(tenCharVersion)
+            console.log(`🔍 Found 5A device ID: ${match[0]} → Cleaned: ${fiveANumber} → Trimmed to 10: ${tenCharVersion}`)
+          }
+        }
+      }
     }
 
     // Also check custom field
@@ -124,7 +154,25 @@ export class FreshdeskService {
       }
     }
 
-    return Array.from(deviceIds).sort()
+    const result = Array.from(deviceIds).sort()
+    console.log(`🔍 Total device IDs found: ${result.length}`)
+    if (result.length > 0) {
+      console.log(`📋 Device IDs: ${result.join(', ')}`)
+    }
+    return result
+  }
+
+  // Extract Teams search terms from all VIDs (use full VID for search)
+  extractTeamsSearchTerms(deviceIds: string[]): string[] {
+    const searchTerms = new Set<string>()
+    
+    for (const deviceId of deviceIds) {
+      // Add all device IDs as search terms (both regular 10-digit and 5A VIDs)
+      searchTerms.add(deviceId)
+      console.log(`🔍 Teams search term: ${deviceId}`)
+    }
+    
+    return Array.from(searchTerms)
   }
 
   buildTicketText(ticket: FreshdeskTicket): string {

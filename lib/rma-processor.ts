@@ -113,28 +113,30 @@ export class RMAProcessor {
 
       console.log(`✅ AI analysis complete: ${reasonAnalysis.primaryReason}`)
 
-      // Step 4: Teams Search for 5A00 device IDs
-      console.log(`🔍 Searching Teams for 5A00 device IDs...`)
+      // Step 4: Teams Search for all VIDs
+      console.log(`🔍 Searching Teams for all VIDs...`)
       
       let teamsSearchResults = null
       let teamsSummary = null
       
-      // Check for 5A00 device IDs
-      const fiveADeviceIds = deviceIds.filter(id => id.match(/^5A00\d{6}$/))
+      // Extract Teams search terms from all device IDs (use full VIDs)
+      const teamsSearchTerms = this.freshdesk.extractTeamsSearchTerms(deviceIds)
       
-      if (fiveADeviceIds.length > 0 && userAccessToken) {
+      if (teamsSearchTerms.length > 0 && userAccessToken) {
         console.log(`📧 Using user authentication for Teams search`)
         
         try {
-          // Use user's access token for enhanced search
-          const searchPromises = fiveADeviceIds.map(async (deviceId) => {
+          // Use user's access token for enhanced search  
+          console.log(`🔍 Found ${teamsSearchTerms.length} VID search terms: ${teamsSearchTerms.join(', ')}`)
+          
+          const searchPromises = teamsSearchTerms.map(async (searchTerm) => {
             const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/teams/search`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
               },
               body: JSON.stringify({
-                deviceId,
+                deviceId: searchTerm, // Using full VID as search term
                 accessToken: userAccessToken
               })
             })
@@ -142,10 +144,10 @@ export class RMAProcessor {
             if (response.ok) {
               return await response.json()
             } else {
-              console.error(`Teams search failed for ${deviceId}:`, response.statusText)
+              console.error(`Teams search failed for ${searchTerm}:`, response.statusText)
               return {
                 searchPerformed: false,
-                deviceId,
+                deviceId: searchTerm,
                 message: 'Teams search failed',
                 results: []
               }
@@ -163,17 +165,18 @@ export class RMAProcessor {
             )
             console.log(`✅ Teams search complete: Found ${totalMessages} message(s) using user auth`)
           } else {
-            teamsSummary = `Teams search performed with user authentication but no messages found for devices: ${fiveADeviceIds.join(', ')}`
+            teamsSummary = `Teams search performed with user authentication but no messages found for search terms: ${teamsSearchTerms.join(', ')}`
             console.log(`ℹ️ Teams search complete: No relevant messages found`)
           }
         } catch (error) {
           console.error('User Teams search failed:', error)
           teamsSummary = `Teams search attempted but failed: ${error instanceof Error ? error.message : 'Unknown error'}`
         }
-      } else if (fiveADeviceIds.length > 0) {
+      } else if (teamsSearchTerms.length > 0) {
         // Fallback to service search (limited permissions)
         console.log(`⚙️ Using service authentication for Teams search (limited)`)
-        const teamsResults = await this.teams.searchMultipleDeviceIds(deviceIds)
+        console.log(`🔍 Searching for VID terms: ${teamsSearchTerms.join(', ')}`)
+        const teamsResults = await this.teams.searchMultipleDeviceIds(teamsSearchTerms)
         teamsSearchResults = teamsResults.length > 0 ? teamsResults : null
         teamsSummary = teamsResults.length > 0 
           ? teamsResults.map(r => r.summary).join('\n\n---\n\n')
@@ -186,8 +189,8 @@ export class RMAProcessor {
           console.log(`ℹ️ Teams search complete: No relevant messages found`)
         }
       } else {
-        teamsSummary = `No 5A00 device IDs found to search in Teams`
-        console.log(`ℹ️ No 5A00 device IDs found for Teams search`)
+        teamsSummary = `No VIDs found to search in Teams`
+        console.log(`ℹ️ No VIDs found for Teams search`)
       }
 
       // Step 5: Save to database
