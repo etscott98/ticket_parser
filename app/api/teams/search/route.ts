@@ -1,28 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Client } from '@microsoft/microsoft-graph-client'
+import { TeamsSearchRequestSchema } from '@/lib/schemas'
+import { handleAPIError, createLogger, ExternalServiceError } from '@/lib/errors'
+
+const logger = createLogger('Teams-Search-API')
 
 export async function POST(request: NextRequest) {
   try {
-    const { deviceId, accessToken } = await request.json()
+    logger.info('Teams search request received')
+    
+    // Parse and validate request body
+    const body = await request.json()
+    const validatedData = TeamsSearchRequestSchema.parse(body)
+    
+    logger.info('Request validated', { deviceId: validatedData.deviceId })
 
-    if (!deviceId) {
-      return NextResponse.json(
-        { error: 'Device ID is required' },
-        { status: 400 }
-      )
-    }
-
-    if (!accessToken) {
-      return NextResponse.json(
-        { error: 'Access token is required' },
-        { status: 401 }
-      )
-    }
-
-    // Accept all device IDs (both 10-digit numbers and 5A VIDs)
-    console.log(`✅ Searching Teams for VID: ${deviceId}`)
-
-    console.log(`🔍 Searching Teams for device ID: ${deviceId}`)
+    const { deviceId, accessToken } = validatedData
+    
+    logger.info('Starting Teams search', { deviceId })
 
     // Initialize Graph client with user's access token
     const graphClient = Client.init({

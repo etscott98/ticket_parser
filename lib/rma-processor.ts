@@ -2,16 +2,22 @@ import { supabaseAdmin } from './supabase'
 import { FreshdeskService } from './freshdesk'
 import { OpenAIService } from './openai'
 import { TeamsService } from './teams'
-import { Database } from './database.types'
+import { 
+  RMATicket, 
+  RMATicketInsert, 
+  RMATicketUpdate, 
+  IRMAProcessor,
+  ProcessingResult,
+  TeamsSearchResult
+} from './types'
+import { APP_CONFIG, ProcessingStatus } from './config'
+import { createLogger, NotFoundError, ExternalServiceError } from './errors'
 
-type RMATicket = Database['public']['Tables']['rma_tickets']['Row']
-type RMATicketInsert = Database['public']['Tables']['rma_tickets']['Insert']
-type RMATicketUpdate = Database['public']['Tables']['rma_tickets']['Update']
-
-export class RMAProcessor {
-  private freshdesk: FreshdeskService
-  private openai: OpenAIService
-  private teams: TeamsService
+export class RMAProcessor implements IRMAProcessor {
+  private readonly logger = createLogger('RMAProcessor')
+  private readonly freshdesk: FreshdeskService
+  private readonly openai: OpenAIService
+  private readonly teams: TeamsService
 
   constructor() {
     this.freshdesk = new FreshdeskService()
@@ -20,185 +26,65 @@ export class RMAProcessor {
   }
 
   async processRMATicket(rmaNumber: string, userAccessToken?: string): Promise<RMATicket> {
-    console.log(`🔄 Processing RMA ${rmaNumber}...`)
-
-    // Check if ticket already exists
-    const { data: existingTicket } = await supabaseAdmin
-      .from('rma_tickets')
-      .select('*')
-      .eq('rma_number', rmaNumber)
-      .single()
-
-    if (existingTicket && existingTicket.processing_status === 'completed') {
-      console.log(`✅ RMA ${rmaNumber} already processed`)
-      return existingTicket
-    }
-
-    // Create or update ticket record as processing
-    const ticketData: RMATicketInsert = {
-      rma_number: rmaNumber,
-      processing_status: 'processing',
-      updated_at: new Date().toISOString()
-    }
-
-    const { data: ticket, error: insertError } = await supabaseAdmin
-      .from('rma_tickets')
-      .upsert(ticketData, { 
-        onConflict: 'rma_number',
-        ignoreDuplicates: false 
-      })
-      .select()
-      .single()
-
-    if (insertError) {
-      throw new Error(`Failed to create/update ticket record: ${insertError.message}`)
-    }
+    const startTime = Date.now()
+    this.logger.info('Starting RMA processing', { rmaNumber })
 
     try {
+      // Check if ticket already exists
+      const existingTicket = await this.checkExistingTicket(rmaNumber)
+      if (existingTicket?.processing_status === APP_CONFIG.PROCESSING_STATUS.COMPLETED) {
+        this.logger.info('RMA already processed', { rmaNumber })
+        return existingTicket
+      }
+
+      // Create processing record
+      const ticket = await this.createProcessingRecord(rmaNumber)
+
       // Step 1: Fetch from Freshdesk
-      console.log(`📞 Fetching Freshdesk ticket ${rmaNumber}...`)
+      this.logger.info('Fetching Freshdesk ticket', { rmaNumber })
       const freshdeskTicket = await this.freshdesk.getTicket(rmaNumber)
 
       if (!freshdeskTicket) {
-        // Ticket not found
-        const updateData: RMATicketUpdate = {
-          processing_status: 'completed',
-          status: 'Not found',
-          error_message: 'Ticket not found in Freshdesk',
-          ticket_date: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        }
-
-        const { data: updatedTicket, error } = await supabaseAdmin
-          .from('rma_tickets')
-          .update(updateData)
-          .eq('id', ticket.id)
-          .select()
-          .single()
-
-        if (error) throw new Error(`Failed to update ticket: ${error.message}`)
-        
-        console.log(`❌ RMA ${rmaNumber} not found in Freshdesk`)
-        return updatedTicket
+        return await this.updateTicketAsNotFound(ticket.id!, rmaNumber)
       }
 
-      console.log(`✅ Freshdesk ticket found`)
+      this.logger.info('Freshdesk ticket found', { rmaNumber })
 
       // Step 2: Extract data
-      console.log(`🔍 Extracting ticket data...`)
+      this.logger.info('Extracting ticket data', { rmaNumber })
       
-      // Format date
       const ticketDate = new Date(freshdeskTicket.created_at).toISOString()
-      
-      // Extract device IDs
       const deviceIds = this.freshdesk.extractDeviceIds(freshdeskTicket)
       const vidsAssociated = deviceIds.length > 0 ? deviceIds.join(', ') : null
-
-      // Customer information
-      const customerName = freshdeskTicket.requester?.name || null
-      const customerEmail = freshdeskTicket.requester?.email || null
-      const customerInformation = customerName && customerEmail 
-        ? `${customerName} <${customerEmail}>`
-        : customerName || (customerEmail ? `<${customerEmail}>` : null)
-
-      // Status
+      const customerInformation = this.formatCustomerInformation(freshdeskTicket.requester)
       const status = this.freshdesk.mapStatusCode(freshdeskTicket.status)
 
-      console.log(`📊 Found ${deviceIds.length} device ID(s), customer: ${customerInformation}`)
+      this.logger.info('Data extracted', { 
+        rmaNumber, 
+        deviceIdCount: deviceIds.length,
+        customer: customerInformation 
+      })
 
       // Step 3: AI Analysis
-      console.log(`🤖 Analyzing with AI...`)
+      this.logger.info('Starting AI analysis', { rmaNumber })
       const ticketText = this.freshdesk.buildTicketText(freshdeskTicket)
       const reasonAnalysis = await this.openai.analyzeTicketForReason(ticketText)
 
-      console.log(`✅ AI analysis complete: ${reasonAnalysis.primaryReason}`)
+      this.logger.info('AI analysis complete', { 
+        rmaNumber, 
+        primaryReason: reasonAnalysis.primaryReason 
+      })
 
-      // Step 4: Teams Search for all VIDs
-      console.log(`🔍 Searching Teams for all VIDs...`)
-      
-      let teamsSearchResults = null
-      let teamsSummary = null
-      
-      // Extract Teams search terms from all device IDs (use full VIDs)
-      const teamsSearchTerms = this.freshdesk.extractTeamsSearchTerms(deviceIds)
-      
-      if (teamsSearchTerms.length > 0 && userAccessToken) {
-        console.log(`📧 Using user authentication for Teams search`)
-        
-        try {
-          // Use user's access token for enhanced search  
-          console.log(`🔍 Found ${teamsSearchTerms.length} VID search terms: ${teamsSearchTerms.join(', ')}`)
-          
-          const searchPromises = teamsSearchTerms.map(async (searchTerm) => {
-            const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/teams/search`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                deviceId: searchTerm, // Using full VID as search term
-                accessToken: userAccessToken
-              })
-            })
-            
-            if (response.ok) {
-              return await response.json()
-            } else {
-              console.error(`Teams search failed for ${searchTerm}:`, response.statusText)
-              return {
-                searchPerformed: false,
-                deviceId: searchTerm,
-                message: 'Teams search failed',
-                results: []
-              }
-            }
-          })
-          
-          const userTeamsResults = await Promise.all(searchPromises)
-          
-          if (userTeamsResults.some(r => r.results?.length > 0)) {
-            teamsSearchResults = userTeamsResults
-            teamsSummary = userTeamsResults.map(r => r.summary || r.message).join('\n\n---\n\n')
-            
-            const totalMessages = userTeamsResults.reduce((sum, r) => 
-              sum + (r.totalMessages || 0), 0
-            )
-            console.log(`✅ Teams search complete: Found ${totalMessages} message(s) using user auth`)
-          } else {
-            teamsSummary = `Teams search performed with user authentication but no messages found for search terms: ${teamsSearchTerms.join(', ')}`
-            console.log(`ℹ️ Teams search complete: No relevant messages found`)
-          }
-        } catch (error) {
-          console.error('User Teams search failed:', error)
-          teamsSummary = `Teams search attempted but failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }
-      } else if (teamsSearchTerms.length > 0) {
-        // Fallback to service search (limited permissions)
-        console.log(`⚙️ Using service authentication for Teams search (limited)`)
-        console.log(`🔍 Searching for VID terms: ${teamsSearchTerms.join(', ')}`)
-        const teamsResults = await this.teams.searchMultipleDeviceIds(teamsSearchTerms)
-        teamsSearchResults = teamsResults.length > 0 ? teamsResults : null
-        teamsSummary = teamsResults.length > 0 
-          ? teamsResults.map(r => r.summary).join('\n\n---\n\n')
-          : null
-
-        if (teamsSearchResults && teamsSearchResults.some(r => r.messagesFound > 0)) {
-          const totalMessages = teamsSearchResults.reduce((sum, r) => sum + r.messagesFound, 0)
-          console.log(`✅ Teams search complete: Found ${totalMessages} message(s)`)
-        } else {
-          console.log(`ℹ️ Teams search complete: No relevant messages found`)
-        }
-      } else {
-        teamsSummary = `No VIDs found to search in Teams`
-        console.log(`ℹ️ No VIDs found for Teams search`)
-      }
+      // Step 4: Teams Search
+      const { results: teamsSearchResults, summary: teamsSummary } = 
+        await this.performTeamsSearch(deviceIds, userAccessToken)
 
       // Step 5: Save to database
       const updateData: RMATicketUpdate = {
-        processing_status: 'completed',
+        processing_status: APP_CONFIG.PROCESSING_STATUS.COMPLETED,
         ticket_date: ticketDate,
-        customer_name: customerName,
-        customer_email: customerEmail,
+        customer_name: freshdeskTicket.requester?.name || null,
+        customer_email: freshdeskTicket.requester?.email || null,
         customer_information: customerInformation,
         status: status,
         freshdesk_status_code: freshdeskTicket.status,
@@ -216,33 +102,32 @@ export class RMAProcessor {
       }
 
       const { data: finalTicket, error: updateError } = await supabaseAdmin
-        .from('rma_tickets')
+        .from(APP_CONFIG.SUPABASE_TABLE_NAME)
         .update(updateData)
         .eq('id', ticket.id)
         .select()
         .single()
 
       if (updateError) {
-        throw new Error(`Failed to save processed data: ${updateError.message}`)
+        throw new ExternalServiceError('Supabase', `Failed to save processed data: ${updateError.message}`)
       }
 
-      console.log(`🎉 RMA ${rmaNumber} processed successfully`)
-      return finalTicket
+      const processingTime = Date.now() - startTime
+      this.logger.info('RMA processed successfully', { 
+        rmaNumber, 
+        processingTime: `${processingTime}ms` 
+      })
+      
+      return finalTicket!
 
     } catch (error) {
-      console.error(`❌ Error processing RMA ${rmaNumber}:`, error)
-
-      // Mark as failed
-      const errorData: RMATicketUpdate = {
-        processing_status: 'failed',
-        error_message: error instanceof Error ? error.message : 'Unknown error',
-        updated_at: new Date().toISOString()
+      this.logger.error('RMA processing failed', { rmaNumber, error })
+      
+      // Create processing record if it doesn't exist
+      const existingTicket = await this.checkExistingTicket(rmaNumber)
+      if (existingTicket?.id) {
+        await this.updateTicketAsFailed(existingTicket.id, error as Error)
       }
-
-      await supabaseAdmin
-        .from('rma_tickets')
-        .update(errorData)
-        .eq('id', ticket.id)
 
       throw error
     }
@@ -284,6 +169,186 @@ export class RMAProcessor {
 
     if (error) {
       throw new Error(`Failed to delete RMA ticket: ${error.message}`)
+    }
+  }
+
+  // Helper methods
+  private async checkExistingTicket(rmaNumber: string): Promise<RMATicket | null> {
+    const { data, error } = await supabaseAdmin
+      .from(APP_CONFIG.SUPABASE_TABLE_NAME)
+      .select('*')
+      .eq('rma_number', rmaNumber)
+      .single()
+
+    if (error && error.code !== 'PGRST116') {
+      throw new ExternalServiceError('Supabase', error.message)
+    }
+
+    return data
+  }
+
+  private async createProcessingRecord(rmaNumber: string): Promise<RMATicket> {
+    const ticketData: RMATicketInsert = {
+      rma_number: rmaNumber,
+      processing_status: APP_CONFIG.PROCESSING_STATUS.PROCESSING,
+      updated_at: new Date().toISOString()
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from(APP_CONFIG.SUPABASE_TABLE_NAME)
+      .upsert(ticketData, { 
+        onConflict: 'rma_number',
+        ignoreDuplicates: false 
+      })
+      .select()
+      .single()
+
+    if (error) {
+      throw new ExternalServiceError('Supabase', `Failed to create processing record: ${error.message}`)
+    }
+
+    return data!
+  }
+
+  private async updateTicketAsNotFound(ticketId: string, rmaNumber: string): Promise<RMATicket> {
+    const updateData: RMATicketUpdate = {
+      processing_status: APP_CONFIG.PROCESSING_STATUS.COMPLETED,
+      status: 'Not found',
+      error_message: 'Ticket not found in Freshdesk',
+      ticket_date: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from(APP_CONFIG.SUPABASE_TABLE_NAME)
+      .update(updateData)
+      .eq('id', ticketId)
+      .select()
+      .single()
+
+    if (error) {
+      throw new ExternalServiceError('Supabase', error.message)
+    }
+
+    this.logger.info('RMA marked as not found', { rmaNumber })
+    return data!
+  }
+
+  private async updateTicketAsFailed(ticketId: string, error: Error): Promise<void> {
+    const errorData: RMATicketUpdate = {
+      processing_status: APP_CONFIG.PROCESSING_STATUS.FAILED,
+      error_message: error.message,
+      updated_at: new Date().toISOString()
+    }
+
+    await supabaseAdmin
+      .from(APP_CONFIG.SUPABASE_TABLE_NAME)
+      .update(errorData)
+      .eq('id', ticketId)
+  }
+
+  private formatCustomerInformation(requester?: { name: string; email: string }): string | null {
+    if (!requester) return null
+    
+    const { name, email } = requester
+    if (name && email) return `${name} <${email}>`
+    if (name) return name
+    if (email) return `<${email}>`
+    return null
+  }
+
+  private async performTeamsSearch(
+    deviceIds: string[], 
+    userAccessToken?: string
+  ): Promise<{ results: TeamsSearchResult[] | null; summary: string | null }> {
+    const teamsSearchTerms = this.freshdesk.extractTeamsSearchTerms(deviceIds)
+    
+    if (teamsSearchTerms.length === 0) {
+      return {
+        results: null,
+        summary: 'No VIDs found to search in Teams'
+      }
+    }
+
+    this.logger.info('Starting Teams search', { 
+      searchTermsCount: teamsSearchTerms.length,
+      hasUserToken: !!userAccessToken 
+    })
+
+    if (userAccessToken) {
+      return await this.performUserTeamsSearch(teamsSearchTerms, userAccessToken)
+    } else {
+      return await this.performServiceTeamsSearch(teamsSearchTerms)
+    }
+  }
+
+  private async performUserTeamsSearch(
+    searchTerms: string[], 
+    accessToken: string
+  ): Promise<{ results: TeamsSearchResult[] | null; summary: string | null }> {
+    try {
+      const searchPromises = searchTerms.map(async (searchTerm) => {
+        const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/teams/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deviceId: searchTerm, accessToken }),
+          signal: AbortSignal.timeout(APP_CONFIG.TEAMS_SEARCH_TIMEOUT)
+        })
+        
+        if (response.ok) {
+          return await response.json()
+        } else {
+          this.logger.error('Teams search failed', { searchTerm, status: response.statusText })
+          return {
+            searchPerformed: false,
+            deviceId: searchTerm,
+            message: 'Teams search failed',
+            results: []
+          }
+        }
+      })
+      
+      const results = await Promise.all(searchPromises)
+      
+      if (results.some(r => r.results?.length > 0)) {
+        const totalMessages = results.reduce((sum, r) => sum + (r.totalMessages || 0), 0)
+        return {
+          results,
+          summary: `Teams search performed with user authentication. Found ${totalMessages} message(s) across ${results.filter(r => r.results?.length > 0).length} chat(s) for VIDs: ${searchTerms.join(', ')}`
+        }
+      } else {
+        return {
+          results: null,
+          summary: `Teams search performed with user authentication but no messages found for search terms: ${searchTerms.join(', ')}`
+        }
+      }
+    } catch (error) {
+      this.logger.error('User Teams search failed', error)
+      return {
+        results: null,
+        summary: `Teams search attempted but failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      }
+    }
+  }
+
+  private async performServiceTeamsSearch(
+    searchTerms: string[]
+  ): Promise<{ results: TeamsSearchResult[] | null; summary: string | null }> {
+    this.logger.info('Using service authentication for Teams search')
+    
+    const teamsResults = await this.teams.searchMultipleDeviceIds(searchTerms)
+    
+    if (teamsResults.length > 0) {
+      const totalMessages = teamsResults.reduce((sum, r) => sum + (r.totalMessages || 0), 0)
+      return {
+        results: teamsResults,
+        summary: teamsResults.map(r => r.summary).join('\n\n---\n\n')
+      }
+    } else {
+      return {
+        results: null,
+        summary: null
+      }
     }
   }
 }
