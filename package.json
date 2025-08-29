@@ -1,0 +1,35 @@
+{
+  "name": "rma-management-system",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@azure/msal-browser": "^3.30.0",
+    "@azure/msal-node": "^2.6.6",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "@supabase/supabase-js": "^2.38.4",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.0.1",
+    "clsx": "^2.0.0",
+    "date-fns": "^2.30.0",
+    "eslint": "^8",
+    "eslint-config-next": "14.0.4",
+    "isomorphic-fetch": "^3.0.0",
+    "lucide-react": "^0.294.0",
+    "next": "14.0.4",
+    "openai": "^4.20.1",
+    "postcss": "^8",
+    "react": "^18",
+    "react-dom": "^18",
+    "tailwind-merge": "^2.0.0",
+    "tailwindcss": "^3.3.0",
+    "typescript": "^5"
+  }
+}
