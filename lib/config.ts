@@ -1,40 +1,7 @@
+import { AppConfiguration } from './interfaces'
+
 // Application Configuration
-export const APP_CONFIG = {
-  // Timeouts (in milliseconds)
-  RMA_PROCESSING_TIMEOUT: 30000,
-  TEAMS_SEARCH_TIMEOUT: 10000,
-  FRESHDESK_API_TIMEOUT: 15000,
-  OPENAI_API_TIMEOUT: 20000,
-
-  // Pagination defaults
-  DEFAULT_PAGE_SIZE: 50,
-  MAX_PAGE_SIZE: 100,
-
-  // Processing limits
-  MAX_DEVICE_IDS: 20,
-  MAX_TEAMS_SEARCH_TERMS: 10,
-  MAX_CHAT_MESSAGES_PER_SEARCH: 500,
-  MAX_CHATS_TO_SEARCH: 50,
-
-  // Teams search configuration
-  TEAMS_SEARCH_MONTHS_BACK: 6,
-  TEAMS_MAX_MESSAGE_PREVIEW_LENGTH: 100,
-
-  // OpenAI configuration
-  OPENAI_MODEL: 'gpt-4o-mini',
-  OPENAI_MAX_TOKENS: 1000,
-  OPENAI_TEMPERATURE: 0.1,
-
-  // Freshdesk configuration
-  FRESHDESK_STATUS_CODES: {
-    2: 'Open',
-    3: 'Pending',
-    4: 'Resolved',
-    5: 'Closed',
-    6: 'Waiting on Customer',
-    7: 'Waiting on Third Party'
-  } as const,
-
+export const APP_CONFIG: AppConfiguration = {
   // Database configuration
   SUPABASE_TABLE_NAME: 'rma_tickets',
   
@@ -44,7 +11,17 @@ export const APP_CONFIG = {
     PROCESSING: 'processing',
     COMPLETED: 'completed',
     FAILED: 'failed'
-  } as const,
+  },
+
+  // Freshdesk configuration
+  FRESHDESK_STATUS_CODES: {
+    2: 'Open',
+    3: 'Pending',
+    4: 'Resolved',
+    5: 'Closed',
+    6: 'Waiting on Customer',
+    7: 'Waiting on Third Party'
+  },
 
   // Device ID patterns
   DEVICE_ID_PATTERNS: {
@@ -58,8 +35,24 @@ export const APP_CONFIG = {
     FIVE_A_EXACT: /\b5A[A-Z0-9]{8}\b/gi,
     FIVE_A_FORMATTED: /5A[A-Z0-9\-\.\s]{8,}/gi,
     FIVE_A_GENERAL: /5A[A-Z0-9]{8}/gi
+  },
+
+  // Timeouts (in milliseconds)
+  TIMEOUTS: {
+    RMA_PROCESSING: 30000,
+    TEAMS_SEARCH: 10000,
+    FRESHDESK_API: 15000,
+    OPENAI_API: 20000
+  },
+
+  // Processing limits
+  LIMITS: {
+    MAX_DEVICE_IDS: 20,
+    MAX_TEAMS_SEARCH_TERMS: 10,
+    MAX_CHAT_MESSAGES_PER_SEARCH: 500,
+    MAX_CHATS_TO_SEARCH: 50
   }
-} as const
+}
 
 // Environment-specific configuration
 export const ENV_CONFIG = {
