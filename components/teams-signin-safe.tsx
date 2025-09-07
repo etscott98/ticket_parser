@@ -73,7 +73,7 @@ export function TeamsSignInSafe({ onAuthChange }: TeamsSignInSafeProps) {
       const tenantId = process.env.NEXT_PUBLIC_MICROSOFT_TENANT_ID!
       
       const redirectUri = encodeURIComponent(window.location.origin + '/auth/callback')
-      const scopes = encodeURIComponent('https://graph.microsoft.com/Chat.Read https://graph.microsoft.com/Chat.ReadBasic https://graph.microsoft.com/User.Read https://graph.microsoft.com/ChatMessage.Read')
+      const scopes = encodeURIComponent('https://graph.microsoft.com/Chat.ReadWrite.All https://graph.microsoft.com/User.Read')
       
       const authUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?` +
         `client_id=${clientId}` +
@@ -336,7 +336,7 @@ export function TeamsSignInSafe({ onAuthChange }: TeamsSignInSafeProps) {
         )}
 
         <div className="text-xs text-gray-500 border-t pt-2">
-          <strong>Permissions:</strong> Chat.Read, Chat.ReadBasic, User.Read, ChatMessage.Read
+          <strong>Permissions:</strong> Chat.ReadWrite.All, User.Read
         </div>
       </CardContent>
     </Card>
